@@ -1,5 +1,22 @@
 // CinePro CF Worker — Hono-based API server
 // Drop-in replacement for artifacts/api-server using Cloudflare Workers
+
+// CinePro CF Worker — Hono-based API server
+// Drop-in replacement for artifacts/api-server using Cloudflare Workers
+// ─── postMessage bridge — injected into every HTML page ──────────────────────
+// Lets a parent page listen for video events (ended, timeupdate) for auto-next.
+const POSTMESSAGE_SCRIPT = `<script>(function(){function hook(){document.querySelectorAll('video').forEach(function(v){if(v._ac)return;v._ac=true;v.addEventListener('ended',function(){window.top&&window.top.postMessage({event:'ended'},'*');window.parent.postMessage({event:'ended'},'*');});v.addEventListener('timeupdate',function(){window.parent.postMessage({event:'timeupdate',time:v.currentTime,duration:v.duration||0},'*');});});}hook();new MutationObserver(hook).observe(document.documentElement,{subtree:true,childList:true});})();<\/script>`;
+function injectPostMessageScript(response: Response): Response {
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('text/html')) return response;
+    return new HTMLRewriter()
+        .on('body', {
+            element(el) {
+                el.onEndTag(tag => { tag.before(POSTMESSAGE_SCRIPT, { html: true }); });
+            },
+        })
+        .transform(response);
+}
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from './types.js';
@@ -319,10 +336,10 @@ app.notFound(async (c) => {
     // Try to serve the static file; if not found, fall back to index.html
     // so client-side routing (/movie/:id, /tv/:id) works correctly.
     const assetRes = await c.env.ASSETS.fetch(c.req.raw);
-    if (assetRes.status !== 404) return assetRes;
+    if (assetRes.status !== 404) return injectPostMessageScript(assetRes);
     // SPA fallback — serve index.html for unknown paths
     const indexReq = new Request(new URL('/', c.req.url).toString(), c.req.raw);
-    return c.env.ASSETS.fetch(indexReq);
+    return injectPostMessageScript(await c.env.ASSETS.fetch(indexReq));
 });
 
 export default app;
