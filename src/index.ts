@@ -1,11 +1,32 @@
 // CinePro CF Worker — Hono-based API server
 // Drop-in replacement for artifacts/api-server using Cloudflare Workers
 
-// CinePro CF Worker — Hono-based API server
-// Drop-in replacement for artifacts/api-server using Cloudflare Workers
 // ─── postMessage bridge — injected into every HTML page ──────────────────────
 // Lets a parent page listen for video events (ended, timeupdate) for auto-next.
-const POSTMESSAGE_SCRIPT = `<script>(function(){function hook(){document.querySelectorAll('video').forEach(function(v){if(v._ac)return;v._ac=true;v.addEventListener('ended',function(){window.top&&window.top.postMessage({event:'ended'},'*');window.parent.postMessage({event:'ended'},'*');});v.addEventListener('timeupdate',function(){window.parent.postMessage({event:'timeupdate',time:v.currentTime,duration:v.duration||0},'*');});});}hook();new MutationObserver(hook).observe(document.documentElement,{subtree:true,childList:true});})();<\/script>`;
+const POSTMESSAGE_SCRIPT = `<script>(function(){
+/* ── postMessage bridge (ended / timeupdate) ── */
+function hookMessages(v){if(v._ac)return;v._ac=true;v.addEventListener('ended',function(){window.top&&window.top.postMessage({event:'ended'},'*');window.parent.postMessage({event:'ended'},'*');});v.addEventListener('timeupdate',function(){window.parent.postMessage({event:'timeupdate',time:v.currentTime,duration:v.duration||0},'*');});}
+
+/* ── Tap-to-unmute banner ── */
+var _banner=null;
+function showBanner(){if(_banner||!document.body)return;_banner=document.createElement('div');_banner.style.cssText='position:fixed;top:16px;right:16px;z-index:2147483647;display:flex;align-items:center;gap:6px;background:rgba(0,0,0,0.65);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.8);font-size:12px;font-weight:500;padding:6px 14px;border-radius:999px;pointer-events:none;font-family:system-ui,sans-serif;';_banner.textContent='🔇 Tap to unmute';document.body.appendChild(_banner);}
+function hideBanner(){if(_banner){_banner.remove();_banner=null;}}
+
+/* ── Unmute all muted videos on first user gesture ── */
+function unmuteAll(){document.querySelectorAll('video').forEach(function(v){if(v.muted){v.muted=false;if(v.paused&&!v.ended)v.play().catch(function(){});}});hideBanner();}
+var _unmuteAdded=false;
+function ensureUnmuteListener(){if(_unmuteAdded)return;_unmuteAdded=true;document.addEventListener('click',unmuteAll,{once:true});document.addEventListener('touchstart',unmuteAll,{once:true,passive:true});}
+
+/* ── Check video state every 600ms, show/hide banner ── */
+function checkVideos(){var muted=false;document.querySelectorAll('video').forEach(function(v){if(!v.paused&&v.muted)muted=true;});if(muted){showBanner();ensureUnmuteListener();}else{hideBanner();}}
+setInterval(checkVideos,600);
+
+/* ── Hook messages + run initial check ── */
+function hookAll(){document.querySelectorAll('video').forEach(hookMessages);checkVideos();}
+hookAll();
+new MutationObserver(hookAll).observe(document.documentElement,{subtree:true,childList:true});
+})();<\/script>`;
+
 function injectPostMessageScript(response: Response): Response {
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('text/html')) return response;
@@ -17,6 +38,7 @@ function injectPostMessageScript(response: Response): Response {
         })
         .transform(response);
 }
+
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from './types.js';
